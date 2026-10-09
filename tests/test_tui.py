@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from textual.widgets import DataTable, Input
+from textual.widgets import DataTable, Input, Tree
+from textual.widgets._tabbed_content import ContentTabs
 
 from pdd2uipath.core.config import ExecutorKind, Settings
 from pdd2uipath.core.platform import WINDOWS
@@ -69,6 +70,17 @@ async def test_app_composes_without_pipeline_at_80x24() -> None:
         assert not app.query_one(Inspector).display
         await pilot.press("t")
         assert app.theme == "pdd2uipath-light"
+        # regression: focusing a widget inside a pane (clicking the PDD tree) used to crash
+        # because the subclass skipped TabbedContent's own tab bar and content switcher
+        await pilot.press("i")
+        insp = app.query_one(Inspector)
+        assert insp.query_one(ContentTabs) is not None
+        app.query_one("#pdd-tree", Tree).focus()
+        await pilot.pause()
+        assert insp.active == "tab-pdd"
+        insp.active = "tab-trace"
+        await pilot.pause()
+        assert app.query_one("#trace-table", DataTable).display
 
 
 @windows_only

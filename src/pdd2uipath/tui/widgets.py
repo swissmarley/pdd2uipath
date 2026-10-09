@@ -306,22 +306,37 @@ class Inspector(TabbedContent):
     """
 
     def compose(self) -> ComposeResult:
-        with TabPane("PDD", id="tab-pdd"):
-            yield Static("", id="pdd-verdict")
-            yield Tree("PDD", id="pdd-tree")
-        with TabPane("Spec", id="tab-spec"):
-            yield Tree("ProcessSpec", id="spec-tree")
-            yield Static("", id="spec-detail")
-        with TabPane("Design", id="tab-design"):
-            yield VerticalScroll(Markdown("", id="design-md"))
-        with TabPane("Plan", id="tab-plan"):
-            yield VerticalScroll(
-                Static("", id="plan-status"), Markdown("", id="plan-md"), Static("", id="plan-diff")
-            )
-        with TabPane("Validation", id="tab-validation"):
-            yield DataTable(id="validation-table", cursor_type="row")
-        with TabPane("Traceability", id="tab-trace"):
-            yield DataTable(id="trace-table", cursor_type="row")
+        # A TabbedContent subclass must hand its panes to ``compose_add_child`` and let the
+        # parent compose build the tab bar and the content switcher; yielding the panes
+        # directly leaves those internals missing and the first focus inside a pane crashes.
+        panes = [
+            TabPane("PDD", Static("", id="pdd-verdict"), Tree("PDD", id="pdd-tree"), id="tab-pdd"),
+            TabPane(
+                "Spec",
+                Tree("ProcessSpec", id="spec-tree"),
+                Static("", id="spec-detail"),
+                id="tab-spec",
+            ),
+            TabPane("Design", VerticalScroll(Markdown("", id="design-md")), id="tab-design"),
+            TabPane(
+                "Plan",
+                VerticalScroll(
+                    Static("", id="plan-status"),
+                    Markdown("", id="plan-md"),
+                    Static("", id="plan-diff"),
+                ),
+                id="tab-plan",
+            ),
+            TabPane(
+                "Validation",
+                DataTable(id="validation-table", cursor_type="row"),
+                id="tab-validation",
+            ),
+            TabPane("Traceability", DataTable(id="trace-table", cursor_type="row"), id="tab-trace"),
+        ]
+        for pane in panes:
+            self.compose_add_child(pane)
+        yield from super().compose()
 
     def on_mount(self) -> None:
         self.query_one("#validation-table", DataTable).add_columns(
