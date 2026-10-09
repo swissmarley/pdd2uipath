@@ -1,0 +1,11 @@
+# Keep UiPath artefacts byte-stable across WSL and Windows git.
+*.xaml  -text
+*.json  -text
+*.cs    -text
+*.xlsx  binary
+*.nupkg binary
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+*.py    text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf

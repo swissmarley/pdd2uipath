@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pdd2uipath.bridge.job/1",
+  "title": "pdd2uipath bridge job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "created", "cwd", "argv", "timeout_s"],
+  "properties": {
+    "schema": { "const": "pdd2uipath.bridge.job/1" },
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$" },
+    "created": { "type": "string", "description": "ISO-8601 UTC timestamp" },
+    "cwd": {
+      "type": "string",
+      "pattern": "^[A-Za-z]:\\\\",
+      "description": "Absolute Windows path inside the workspace root"
+    },
+    "argv": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^[^&|<>^\"%!\\r\\n\\u0000]*$" },
+      "description": "Arguments after `uip`. argv[0] must be rpa|login|--version|--help; rpa verbs are allowlisted."
+    },
+    "timeout_s": { "type": "number", "minimum": 1 },
+    "label": { "type": "string" }
+  }
+}

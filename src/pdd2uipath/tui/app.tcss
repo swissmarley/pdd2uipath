@@ -1,0 +1,49 @@
+Screen {
+    background: $background;
+    color: $foreground;
+}
+
+#body {
+    height: 1fr;
+}
+
+SessionLog {
+    width: 1fr;
+    height: 1fr;
+    background: $background;
+}
+
+Footer {
+    background: $panel;
+}
+
+Footer > .footer--key {
+    color: $accent;
+}
+
+Markdown {
+    margin: 0;
+    padding: 0;
+}
+
+Tree {
+    height: 1fr;
+}
+
+Input {
+    border: tall $panel;
+}
+
+Input:focus {
+    border: tall $primary;
+}
+
+ModalScreen {
+    background: $background 60%;
+}
+
+Label.title {
+    text-style: bold;
+    color: $primary;
+    margin: 0 0 1 0;
+}

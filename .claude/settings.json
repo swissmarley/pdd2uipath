@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uip --version)",
+      "Bash(uip login status)",
+      "Bash(uip login status *)",
+      "Bash(uip skills list *)",
+      "Bash(uip rpa *)",
+      "Bash(uv run *)",
+      "Bash(uv sync *)"
+    ],
+    "ask": [
+      "Bash(uip login)",
+      "Bash(uip login --authority *)",
+      "Bash(uip rpa publish *)",
+      "Bash(uip rpa pack *)",
+      "Bash(uip rpa run *)",
+      "Bash(uip solution *)",
+      "Bash(uip or *)"
+    ]
+  }
+}

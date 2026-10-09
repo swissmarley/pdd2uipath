@@ -1,0 +1,53 @@
+# pdd2uipath configuration (copy to ./pdd2uipath.toml or ~/.config/pdd2uipath/config.toml).
+# Every key can also be set as PDD2UIPATH_<KEY> (nested: PDD2UIPATH_AGENT__BACKEND).
+
+# Windows filesystem root where generated projects live (never under \\wsl$).
+workspace_root = "C:\\Users\\<you>\\RPA\\pdd2uipath-projects"
+
+# auto | native | wsl-interop | wsl-bridge | wsl-manual   (doctor --write-config sets it)
+executor = "auto"
+# Resolved by doctor, e.g. ["C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\<you>\\AppData\\Roaming\\npm\\node_modules\\@uipath\\cli\\dist\\index.js"]
+uip_windows_command = []
+uip_brain_command = []
+# Path of the uipath-rpa skill folder (doctor finds it: `uip skills list` store, opencode/copilot skill dirs)
+# skills_root = "C:\\Users\\<you>\\.uipath\\.skills\\skills\\uipath-rpa"
+
+default_target_framework = "Windows"
+expression_language = "VisualBasic"
+ui_capture = "stub"            # stub | live (live applies the skill's UIA minimum version)
+approval_rule = "document-control-and-signoff"
+
+[extraction]
+backend = "auto"               # auto | openai-compatible | opencode | copilot | command | fixture
+# base_url = "http://localhost:11434/v1"   # local LLM (OpenAI-compatible); API key from OPENAI_API_KEY
+# model = "qwen2.5-coder:32b"              # openai-compatible; opencode: "github-copilot/gpt-6.1-sol"
+#                                          # copilot: "gpt-6.1-sol" (or omit = auto; Copilot Free: auto only)
+max_tokens = 32000
+
+[agent]
+backend = "auto"               # auto | opencode | copilot | fake
+# model = "ollama/qwen2.5-coder:32b"       # opencode provider/model, e.g. "github-copilot/gpt-6.1-sol";
+#                                          # copilot: a picker-enabled id such as "gpt-6.1-sol", else auto
+max_turns = 120
+max_budget_usd = 25.0
+timeout_s = 7200
+
+[repair]
+max_rounds = 2
+
+[bridge]
+poll_interval_s = 1.0
+heartbeat_timeout_s = 15.0
+job_timeout_s = 900.0
+
+[ui]
+theme = "dark"                 # dark | light (NO_COLOR is respected)
+glyphs = "unicode"             # unicode | ascii
+
+[uipath]
+org = ""
+tenant = ""
+
+[packages]
+uia_min_version = "26.10.2"
+prefer_prerelease = false

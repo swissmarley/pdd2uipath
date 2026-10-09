@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "document_id": "PDD-FIN-TRE-007",
+    "title": "Daily FX Reference Rate Update",
+    "version": "1.0",
+    "status": "Approved",
+    "date": "25.09.2026",
+    "business_unit": "Finance – Treasury",
+    "prepared_by": "Tobias Graf (Business Analyst, RPA CoE)",
+    "purpose": "Every business day copy the official reference exchange rates from the central bank website into the FX master workbook and the treasury system, then send a confirmation email.",
+    "source_ref": "p.2 §2.1"
+  },
+  "steps": [
+    {"step_id": "S01", "name": "Open reference rate page", "part": "", "actor": "robot", "application": "Browser", "action": "Open the central bank reference rate page", "details": ["Open the central bank's daily reference rate page in the browser. URL: to be provided by Treasury."], "inputs": ["URL (to be provided)"], "outputs": ["open page"], "business_rules": [], "exceptions": ["SE-01"], "decision_points": [], "is_ui_interaction": true, "ui_interaction_rationale": "browser navigation", "source_ref": "p.3 §4.3/S01"},
+    {"step_id": "S02", "name": "Read rates", "part": "", "actor": "robot", "application": "Browser", "action": "Read the rates for EUR, USD, GBP, JPY (per 100) and CNY for today's date", "details": ["Locate the table with the daily reference rates", "Verify that the publication date shown on the page equals today's date (BE-01 if not)", "Read the rate for each currency in Appendix A"], "inputs": ["open page"], "outputs": ["EUR", "USD", "GBP", "JPY100", "CNY"], "business_rules": ["BR-01"], "exceptions": ["BE-01"], "decision_points": ["publication date != today -> BE-01"], "is_ui_interaction": true, "ui_interaction_rationale": "reads a table on a web page", "source_ref": "p.3 §4.3/S02"},
+    {"step_id": "S03", "name": "Validate rates", "part": "", "actor": "robot", "application": "", "action": "Validate rates against the previous business day", "details": ["Compare each rate with the previous business day's rate in the FX master workbook", "If a rate deviates by more than 5%, Treasury must be informed (BR-02). Handling of the run in that case: to be clarified."], "inputs": ["today's rates", "previous rates"], "outputs": ["validation result"], "business_rules": ["BR-02"], "exceptions": [], "decision_points": ["deviation > 5% -> inform Treasury (stop or continue: to be clarified)"], "is_ui_interaction": false, "ui_interaction_rationale": "calculation", "source_ref": "p.3 §4.3/S03"},
+    {"step_id": "S04", "name": "Update FX master workbook", "part": "", "actor": "robot", "application": "Excel", "action": "Append today's rates to FX_Rates_Master.xlsm and run macro RefreshPivots", "details": ["Open \\\\fs01\\finance\\Treasury\\FX_Rates_Master.xlsm, sheet Rates", "Append one row: Date, EUR, USD, GBP, JPY100, CNY, Source = 'Robot'", "Run the VBA macro RefreshPivots", "Save and close the workbook"], "inputs": ["today's rates"], "outputs": ["updated workbook"], "business_rules": ["BR-03"], "exceptions": [], "decision_points": [], "is_ui_interaction": false, "ui_interaction_rationale": "Excel activities incl. Execute Macro", "source_ref": "p.3 §4.3/S04"},
+    {"step_id": "S05", "name": "Enter rates in treasury system", "part": "", "actor": "robot", "application": "Treasury system", "action": "Enter the rates in the system", "details": ["Log in to the treasury system and enter the daily rates on the rates maintenance screen", "Screen details will be added after a walkthrough with the SME"], "inputs": ["today's rates", "treasury credential"], "outputs": ["rates entered"], "business_rules": [], "exceptions": [], "decision_points": [], "is_ui_interaction": true, "ui_interaction_rationale": "web application screen", "source_ref": "p.4 §4.3/S05"},
+    {"step_id": "S06", "name": "Confirmation email", "part": "", "actor": "robot", "application": "Outlook", "action": "Send confirmation email to Treasury", "details": ["Send an email to treasury-team@nordhorn.example with subject 'FX reference rates <date> published' and the five rates in the body"], "inputs": ["today's rates"], "outputs": ["email"], "business_rules": [], "exceptions": [], "decision_points": [], "is_ui_interaction": false, "ui_interaction_rationale": "mail activities", "source_ref": "p.4 §4.3/S06"}
+  ],
+  "applications": [
+    {"name": "Central bank reference rate page", "kind": "web", "access": "Public website, any browser; URL to be provided by Treasury", "credential_asset_names": [], "used_for": "Source of daily reference rates", "platform_hints": ["Web (public)", "any browser"], "source_ref": "p.3 §3.3"},
+    {"name": "FX master workbook FX_Rates_Master.xlsm", "kind": "excel", "access": "\\\\fs01\\finance\\Treasury\\FX_Rates_Master.xlsm", "credential_asset_names": [], "used_for": "Rate history; macro RefreshPivots updates reports", "platform_hints": ["Excel (macro-enabled)", ".xlsm", "VBA macro RefreshPivots"], "source_ref": "p.3 §3.3"},
+    {"name": "Treasury system", "kind": "web", "access": "TBD", "credential_asset_names": [], "used_for": "Entry of the daily rates", "platform_hints": ["Web"], "source_ref": "p.3 §3.3"},
+    {"name": "Outlook", "kind": "email", "access": "Microsoft 365", "credential_asset_names": [], "used_for": "Confirmation email", "platform_hints": ["Microsoft 365"], "source_ref": "p.3 §3.3"}
+  ],
+  "data_items": [
+    {"name": "EUR", "direction": "input", "format": "CHF per 1 EUR, 4 decimals", "mandatory": true, "target": "Rates sheet / treasury system", "source_ref": "p.4 §AppendixA"},
+    {"name": "USD", "direction": "input", "format": "CHF per 1 USD", "mandatory": true, "target": "Rates sheet / treasury system", "source_ref": "p.4 §AppendixA"},
+    {"name": "GBP", "direction": "input", "format": "CHF per 1 GBP", "mandatory": true, "target": "Rates sheet / treasury system", "source_ref": "p.4 §AppendixA"},
+    {"name": "JPY", "direction": "input", "format": "CHF per 100 JPY", "mandatory": true, "target": "Rates sheet / treasury system", "source_ref": "p.4 §AppendixA"},
+    {"name": "CNY", "direction": "input", "format": "CHF per 1 CNY", "mandatory": true, "target": "Rates sheet / treasury system", "source_ref": "p.4 §AppendixA"}
+  ],
+  "business_rules": [
+    {"id": "BR-01", "text": "Rates are stored with 4 decimal places; JPY is quoted per 100 units.", "step_ids": ["S02"], "source_ref": "p.4 §5"},
+    {"id": "BR-02", "text": "A day-on-day deviation > 5% for any currency must be reported to Treasury.", "step_ids": ["S03"], "source_ref": "p.4 §5"},
+    {"id": "BR-03", "text": "Only one row per date may exist in sheet Rates.", "step_ids": ["S04"], "source_ref": "p.4 §5"}
+  ],
+  "exceptions": [
+    {"id": "BE-01", "kind": "business", "description": "Rates for today not yet published", "handling": "TBD", "step_ids": ["S02"], "retryable": "unknown", "source_ref": "p.4 §6"},
+    {"id": "SE-01", "kind": "system", "description": "Website not reachable", "handling": "Retry; then inform Treasury", "step_ids": ["S01"], "retryable": "yes", "source_ref": "p.4 §6"}
+  ],
+  "transaction": {"unit": "one daily run processing all currencies in a single pass", "queue_name": "", "dispatcher_performer": false, "volumes": "1 run per day, 5 currencies", "retry_policy": "the run either completes or fails as a whole; no queue items", "source_ref": "p.3 §4.1"},
+  "schedule": {"schedule": "Business days at 09:05 (Europe/Zurich)", "sla": "Rates published by 09:30", "source_ref": "p.4 §7"},
+  "robot_environment": {"description": "Linux serverless robots (Automation Cloud); per IT infrastructure guidelines the process shall run on the Linux serverless robot pool", "os_hints": ["Linux serverless robots", "Automation Cloud"], "robot_type": "serverless", "source_ref": "p.4 §7"},
+  "assumptions": [],
+  "out_of_scope": [],
+  "open_questions": [
+    {"id": "OQ-1", "text": "Treasury system URL, screen layout and credential asset name are not defined (S05 target application unknown).", "owner": "IT Treasury", "blocking": true, "reason": "UI step S05 has no target application/URL/screen", "source_ref": "p.4 §8"},
+    {"id": "OQ-2", "text": "Behaviour on Swiss public holidays and when rates are published late is undefined.", "owner": "Treasury", "blocking": false, "reason": "schedule exception handling; does not block the design", "source_ref": "p.4 §8"},
+    {"id": "OQ-3", "text": "Does a > 5% deviation stop the run or only notify? (S03 control flow undefined)", "owner": "Process Owner", "blocking": true, "reason": "control flow of in-scope step S03 is undefined", "source_ref": "p.4 §8"},
+    {"id": "OQ-4", "text": "Central bank reference rate page URL is 'to be provided by Treasury' (S01).", "owner": "Treasury", "blocking": true, "reason": "UI step S01 has no target URL", "source_ref": "p.3 §4.3/S01"},
+    {"id": "OQ-5", "text": "Handling of BE-01 (rates for today not yet published) is TBD.", "owner": "Treasury", "blocking": true, "reason": "exception handling of in-scope step S02 is undefined", "source_ref": "p.4 §6"}
+  ]
+}
