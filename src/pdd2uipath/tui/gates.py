@@ -121,6 +121,13 @@ class TuiGateHandler:
         ):
             contradiction = self.app.pipeline.design.contradiction.model_dump()
         result = self._waiter.ask(OpenQuestionsScreen(questions, stop_reasons, contradiction))
+        if result == "restart":
+            # the run stops either way; a changed PDD hash makes ingest/extract/design re-run
+            self.app.call_from_thread(
+                self.app.notify,
+                "edit the PDD, then press r: ingest, extract and design re-run on the changed file",
+                timeout=10,
+            )
         return "restart" if result == "restart" else "abort"
 
     def studio_lock(self, message: str) -> Literal["retry", "abort"]:

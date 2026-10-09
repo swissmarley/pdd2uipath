@@ -54,6 +54,13 @@ executor. `wsl-interop` needs binfmt interop; `wsl-bridge` needs the worker star
 [--no-wait]` continues after you ran the script (each round script runs exactly once).
 See `docs/vdi-setup.md` and `docs/decisions.md`.
 
+## Documentation
+
+- [docs/setup-guide.md](docs/setup-guide.md): step-by-step installation (Windows, agent CLIs, Python, doctor, first run, WSL, VDI transfer).
+- [docs/handbook.md](docs/handbook.md): the full manual: TUI keys and slash commands, CLI reference, every stage, artefacts, configuration, executors, agents, troubleshooting.
+- [docs/vdi-setup.md](docs/vdi-setup.md): corporate specifics (Artifactory, proxy, CA, offline wheels).
+- [docs/decisions.md](docs/decisions.md): design decisions and lessons from the real runs.
+
 ## Development
 
 ```bash
