@@ -1,7 +1,7 @@
 # uip CLI surface (probed)
 
 - uip version: `1.203.0`
-- probed at: 2026-10-09T17:07:44+00:00 on `native`
+- probed at: 2026-10-09T20:01:45+00:00 on `native`
 - top-level commands: `login`, `logout`, `config`, `tools`, `skills`, `mcp`, `feedback`
 - `uip rpa` commands: `activities`, `analyze`, `analyzer-rules`, `build`, `cleanup`, `data-fabric-entities`, `debug`, `execution`, `files`, `get-library-object-repositor`, `get-object-repository`, `help`, `init`, `instances`, `pack`, `packages`, `publish`, `remote`, `restore`, `run`, `studio`, `templates`, `test-data`, `tm`, `uia`, `validate`, `workflow-examples`
 

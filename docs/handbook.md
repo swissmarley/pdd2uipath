@@ -118,7 +118,7 @@ file when none was loaded).
 | Command | What it does |
 |---|---|
 | `/help [command]` | list commands or explain one |
-| `/open [pdd-path]` | open a PDD; without a path the picker opens |
+| `/open [path | mcp:<ref>]` | open a PDD; without a path the picker opens; `mcp:<ref>` fetches it through the `fetch-pdd` recipe first |
 | `/run [stage]` | run all stages, or one of ingest, extract, design, plan, scaffold, author, verify, report |
 | `/approve [name]` | approve the current plan as `name` and continue; without a name the modal opens |
 | `/resume` | wsl-manual: collect the pending Windows round and continue |
@@ -139,6 +139,7 @@ file when none was loaded).
 | `/ui-capture [stub|live]` | UI capture mode |
 | `/copilot login|version|models` | Copilot CLI: device-code login streamed into the session log, version, model notes |
 | `/opencode models [provider]|login|version` | OpenCode: the models it can use, login instructions, version |
+| `/mcp servers|tools <srv>|call <srv> <tool> [json]|resources <srv>|read <srv> <uri>|recipe <name> k=v...|fetch-pdd <ref>` | MCP servers: list, inspect tools and resources, call a tool, run a recipe, fetch a PDD |
 | `/bridge install|status|stop` | wsl-bridge worker |
 | `/theme`, `/inspector`, `/clear`, `/quit` | theme, inspector, clear the session log, quit |
 
@@ -147,7 +148,8 @@ Settings keys accepted by `/set` and `/get`: `executor`, `workspace_root`,
 `extraction.backend`, `extraction.model`, `extraction.base_url`, `extraction.api_key_env`,
 `extraction.max_tokens`, `agent.backend`, `agent.model`, `agent.max_turns`, `agent.timeout_s`,
 `repair.max_rounds`, `bridge.poll_interval_s`, `bridge.job_timeout_s`,
-`packages.uia_min_version`, `packages.prefer_prerelease`, `ui.theme`, `ui.glyphs`.
+`packages.uia_min_version`, `packages.prefer_prerelease`, `ui.theme`, `ui.glyphs`,
+`mcp.import_opencode`, `mcp.opencode_config`, `mcp.inbox`, `mcp.fetch_recipe`.
 A new `workspace_root` applies to the next `/open`.
 
 ### Modals
@@ -192,6 +194,12 @@ All stage commands take `--pdd <file>` (derives the run directory from the PDD's
 | `open-studio` | `--pdd/--run` | `uip rpa studio start` on the project, with a direct launch fallback |
 | `status` | `--pdd/--run` | stage table, approval, repair round, pending round |
 | `bridge install|status|stop` | | the wsl-bridge worker scripts, heartbeat, STOP file |
+| `mcp servers` | `--json` | configured MCP servers and recipes |
+| `mcp tools <server>` | `--json` | the tools a server offers, with their arguments |
+| `mcp call <server> <tool>` | `--args <json>`, `--out <file>` | call one tool; text to stdout or blob to a file |
+| `mcp resources <server>`, `mcp read <server> <uri>` | `--out` | list and read resources |
+| `mcp recipe <name> [k=v ...]` | `--out` | run a configured recipe |
+| `mcp fetch-pdd <ref>` | `--out`, `--recipe` | fetch a PDD through the fetch recipe; prints the local path |
 | `forward -- <uip args>` | `--project` | target of the per-project `uip` shim |
 
 Typical sequences:
@@ -225,7 +233,8 @@ command adapter resolves canonical operations against that surface and refuses t
 
 ### Stage 1: ingest
 
-Parses DOCX (python-docx, body order) or PDF (pdfplumber with table anchoring) into a
+Parses DOCX (python-docx, body order), PDF (pdfplumber with table anchoring) or Markdown
+(headings, lists, pipe tables; typically a Confluence page fetched over MCP) into a
 `Document` with headings, paragraphs and tables, each carrying a reference such as `§4.3/S06`
 or `p.3 §4.2`. The approval rule `document-control-and-signoff` requires the Document Control
 table to say `Approved` and every row of the decision table to carry `Approved` with a parseable
@@ -368,6 +377,10 @@ Inside the project pdd2uipath adds `docs\plans\<slug>.md`, `docs\process-spec.js
 | `ui.theme` [dark], `ui.glyphs` [unicode] | TUI appearance; `ascii` for terminals without Unicode |
 | `uipath.org`, `uipath.tenant` [""] | informational |
 | `packages.uia_min_version` [26.10.2], `packages.prefer_prerelease` [false] | package policy |
+| `mcp.servers.<name>` | `transport` (`stdio` or `http`), `command`, `cwd`, `env`, `url`, `headers`, `timeout_s` [60], `enabled` [true]; `${VAR}` in env and header values is read from the environment |
+| `mcp.recipes.<name>` | `server`, `params`, `steps` (each `tool`, `args`, optional `save_as`) or the single-step `tool`/`args`/`save_as` form; `{param}` and `{steps.N.text}` / `{steps.N.json.key}` templates |
+| `mcp.import_opencode` [false], `mcp.opencode_config` [none] | also use OpenCode's `mcp` servers (`local` is stdio, `remote` is http); ours win on a name clash |
+| `mcp.inbox` [pdd-inbox], `mcp.fetch_recipe` [fetch-pdd] | where fetched PDDs land; which recipe fetches them |
 
 ## 8. Executors
 
@@ -414,6 +427,56 @@ When the skill and this documentation disagree, the skill wins. The per-project 
 `uip rpa validate` and `uip rpa build` calls go through the active executor, which matters in
 WSL. `pdd2uipath forward -- <args>` is its target.
 
+## 10b. MCP servers: Confluence, GitHub and your own
+
+pdd2uipath contains a small MCP client (stdio and streamable HTTP, standard library only) so the
+pipeline can use the servers your organisation already runs for OpenCode. Nothing about a
+specific server is built in: tool names differ from server to server, so you describe them once
+in the config as **recipes**.
+
+**Servers.** Declare them under `[mcp.servers.<name>]`, or set `mcp.import_opencode = true` to
+reuse the `mcp` section of OpenCode's `opencode.json`. A stdio server is a command (npm shims are
+started through `node.exe`); an http server is a URL. `${VAR}` in `env` and `headers` is replaced
+from the environment when connecting, so tokens never sit in a file. `doctor` connects to each
+server and reports its tool count.
+
+**Inspecting.** `pdd2uipath mcp servers`, `mcp tools confluence` (names, arguments, required
+ones marked with `*`), `mcp resources github`, `mcp call confluence get_page --args '{"id": "123"}'`,
+`mcp read confluence confluence://page/123 --out page.md`. The TUI has the same under `/mcp`.
+
+**Recipes.** A recipe is one server plus one or more tool calls with templated arguments:
+
+```toml
+[mcp.recipes.fetch-pdd]
+server = "confluence"
+tool = "get_attachment"
+args = { page_id = "{ref}", filename = "PDD.docx" }
+
+[mcp.recipes.publish-branch]
+server = "github"
+params = ["repo", "branch"]
+steps = [
+  { tool = "create_branch", args = { owner = "acme", repo = "{repo}", branch = "{branch}", from_branch = "main" } },
+  { tool = "create_pull_request", args = { owner = "acme", repo = "{repo}", head = "{branch}", base = "main", title = "PDD import {branch}" } },
+]
+```
+
+`{ref}` and the other parameters come from the command line (`mcp recipe publish-branch
+repo=rpa branch=feature/pdd-014`), `{steps.0.text}` and `{steps.0.json.<key>}` reuse earlier
+results, `{out}` is the output path. A value that is exactly one placeholder keeps its type, so
+numbers and objects pass through. `save_as` writes a step's blob or text to a file.
+
+**Fetching PDDs.** `mcp fetch-pdd <ref>` runs the `fetch-pdd` recipe (name configurable with
+`mcp.fetch_recipe`), saves the result under `mcp.inbox` with an extension derived from the MIME
+type (`.pdf`, `.docx`, `.md`), and prints the path for `run-all`. In the TUI `/open mcp:<ref>`
+fetches and opens in one step. Confluence pages returned as Markdown are accepted as PDDs when
+they keep the Document Control and Approval and Sign-off tables.
+
+**GitHub.** Use recipes for repository and branch management (create repository, create
+branch, open a pull request) through your GitHub MCP server. Pushing the generated project's
+commits is a plain `git push` from the project folder with your own credentials; the authoring
+agent itself is never allowed to push.
+
 ## 11. Security notes
 
 Secrets come only from environment variables or the OS keyring; the audit scans generated
@@ -451,5 +514,6 @@ uv run python -m pytest tests/test_tui.py --snapshot-update    # accept changed 
 
 Layout: `core/` (config, events, state, paths, runner, exe), `ingest/`, `spec/`, `design/`,
 `plan/`, `scaffold/`, `agents/`, `verify/`, `report/`, `executors/`, `doctor/`, `tui/`
-(app, widgets, screens, gates, commands, slash). Design decisions and lessons from real runs are
+(app, widgets, screens, gates, commands, slash), `mcp/` (client, recipes, OpenCode import).
+Design decisions and lessons from real runs are
 recorded in [decisions.md](decisions.md).

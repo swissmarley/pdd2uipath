@@ -25,6 +25,9 @@ app = typer.Typer(
 )
 bridge_app = typer.Typer(help="Manage the Windows bridge worker (wsl-bridge executor).")
 app.add_typer(bridge_app, name="bridge")
+from pdd2uipath.cli_mcp import mcp_app  # noqa: E402
+
+app.add_typer(mcp_app, name="mcp")
 
 ConfigOpt = Annotated[Path | None, typer.Option("--config", "-c", help="Path to pdd2uipath.toml")]
 PlainOpt = Annotated[bool, typer.Option("--plain", help="Scriptable output, no TUI")]

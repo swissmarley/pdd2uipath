@@ -96,6 +96,58 @@ class PackagePolicy(BaseModel):
     prefer_prerelease: bool = False
 
 
+class McpServerConfig(BaseModel):
+    """One MCP server. ``${VAR}`` in env/header values is expanded from the environment at
+    connect time, so tokens never live in the config file."""
+
+    transport: str = "stdio"  # stdio | http (streamable HTTP)
+    command: list[str] = Field(default_factory=list)  # stdio: argv, npm shims resolved
+    cwd: str | None = None
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str = ""  # http: the MCP endpoint
+    headers: dict[str, str] = Field(default_factory=dict)
+    timeout_s: float = 60.0
+    enabled: bool = True
+    description: str = ""
+
+
+class McpRecipeStep(BaseModel):
+    tool: str
+    args: dict[str, Any] = Field(default_factory=dict)  # "{param}" and "{steps.N.text}" templates
+    save_as: str | None = None  # write this step's blob/text to a path template
+
+
+class McpRecipeConfig(BaseModel):
+    """A named sequence of tool calls against one server, with templated arguments."""
+
+    server: str
+    description: str = ""
+    params: list[str] = Field(default_factory=list)
+    steps: list[McpRecipeStep] = Field(default_factory=list)
+    # single-step shorthand
+    tool: str | None = None
+    args: dict[str, Any] = Field(default_factory=dict)
+    save_as: str | None = None
+
+    def all_steps(self) -> list[McpRecipeStep]:
+        if self.steps:
+            return list(self.steps)
+        if self.tool:
+            return [McpRecipeStep(tool=self.tool, args=dict(self.args), save_as=self.save_as)]
+        return []
+
+
+class McpSettings(BaseModel):
+    """MCP client: servers (ours and, optionally, OpenCode's), recipes, the PDD inbox."""
+
+    servers: dict[str, McpServerConfig] = Field(default_factory=dict)
+    recipes: dict[str, McpRecipeConfig] = Field(default_factory=dict)
+    import_opencode: bool = False  # also load the mcp section of OpenCode's config
+    opencode_config: str | None = None  # path override for that file
+    inbox: str = "pdd-inbox"  # where fetched PDDs are written (relative to the cwd)
+    fetch_recipe: str = "fetch-pdd"  # the recipe behind `mcp fetch-pdd` and `/open mcp:<ref>`
+
+
 def _default_workspace_root() -> str:
     if os.name == "nt":
         return str(Path.home() / "RPA" / "pdd2uipath-projects")
@@ -132,6 +184,7 @@ class Settings(BaseSettings):
     ui: UiSettings = Field(default_factory=UiSettings)
     uipath: UiPathSettings = Field(default_factory=UiPathSettings)
     packages: PackagePolicy = Field(default_factory=PackagePolicy)
+    mcp: McpSettings = Field(default_factory=McpSettings)
 
     @classmethod
     def settings_customise_sources(

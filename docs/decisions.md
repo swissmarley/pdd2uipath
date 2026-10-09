@@ -148,3 +148,21 @@ Recorded while building pdd2uipath (2026-10-09). Anything not asked of the user 
   running the `.cmd` would pass the multi-kilobyte prompt through `cmd.exe`.
 - Copilot CLI `--output-format json` emits mostly `*_delta` and ephemeral events (19 MB for one
   session); `premiumRequests` in its final `result` event is cumulative per resumed session.
+
+## MCP client (2026-10-09)
+
+- **Own stdlib client, not a library.** The corporate side installs from an Artifactory mirror
+  and sits behind proxies; `urllib` honours `HTTPS_PROXY`/`NO_PROXY` and `SSL_CERT_FILE`, a stdio
+  server is a subprocess. Two transports: stdio (newline-delimited JSON-RPC) and streamable HTTP
+  (POST, JSON or SSE replies, `Mcp-Session-Id`). The legacy HTTP+SSE transport is not
+  implemented; such servers can be bridged with a stdio proxy.
+- **Tool names are configuration.** Every Confluence or GitHub MCP server names its tools
+  differently, so pdd2uipath never hard-codes them: *recipes* in `[mcp.recipes.<name>]` map an
+  intent (`fetch-pdd`, `publish-branch`) onto tool calls with `{param}` / `{steps.N.json.key}`
+  templates. `mcp fetch-pdd <ref>` and `/open mcp:<ref>` run the `fetch-pdd` recipe and feed the
+  result (blob or Markdown page) into ingest; Markdown PDDs are now parsed like DOCX/PDF.
+- **OpenCode's servers are reused.** `mcp.import_opencode = true` reads the `mcp` section of
+  `opencode.json` (`local` -> stdio, `remote` -> http); our `[mcp.servers]` win on name clashes.
+- **Secrets stay in the environment.** `${VAR}` in `env` and `headers` is expanded at connect
+  time; `mcp servers --json` and the TUI never print header or env values.
+

@@ -667,6 +667,64 @@ def run_doctor(
             okr, detail = _reachable(url)
             rep.add(cid, title, "ok" if okr else "warn", f"{url} -> {detail}", "" if okr else fix)
 
+    # 9b. MCP servers and recipes
+    from pdd2uipath.mcp.recipes import resolve_servers
+
+    try:
+        mcp_servers = resolve_servers(settings)
+    except Exception as exc:
+        mcp_servers = {}
+        rep.add("mcp", "MCP servers", "fail", f"config error: {exc}", "fix [mcp] in the config")
+    if not mcp_servers:
+        rep.add(
+            "mcp",
+            "MCP servers",
+            "skip",
+            "none configured",
+            "optional: [mcp.servers.<name>] in the config, or mcp.import_opencode = true",
+        )
+    for mcp_name, mcp_cfg in mcp_servers.items():
+        target = " ".join(mcp_cfg.command) if mcp_cfg.transport == "stdio" else mcp_cfg.url
+        if not probe_network:
+            rep.add(
+                f"mcp-{mcp_name}",
+                f"MCP server {mcp_name}",
+                "skip",
+                f"{mcp_cfg.transport}: {target}",
+                "",
+            )
+            continue
+        try:
+            from pdd2uipath.mcp.client import McpClient
+
+            probe_cfg = mcp_cfg.model_copy(update={"timeout_s": min(mcp_cfg.timeout_s, 20.0)})
+            with McpClient(mcp_name, probe_cfg) as client:
+                tool_count = len(client.list_tools())
+                server_name = client.server_info.get("name", "?")
+            rep.add(
+                f"mcp-{mcp_name}",
+                f"MCP server {mcp_name}",
+                "ok",
+                f"{server_name}: {tool_count} tool(s) via {mcp_cfg.transport}",
+            )
+        except Exception as exc:
+            rep.add(
+                f"mcp-{mcp_name}",
+                f"MCP server {mcp_name}",
+                "fail",
+                str(exc)[:200],
+                "check the command/url, the ${VAR} environment variables and that the server runs",
+            )
+    if settings.mcp.recipes:
+        bad = [k for k, r in settings.mcp.recipes.items() if r.server not in mcp_servers]
+        rep.add(
+            "mcp-recipes",
+            "MCP recipes",
+            "warn" if bad else "ok",
+            ", ".join(f"{k} -> {r.server}" for k, r in settings.mcp.recipes.items()),
+            f"recipes without a configured server: {', '.join(bad)}" if bad else "",
+        )
+
     # 10. bridge status
     if platform.is_wsl or settings.executor in (ExecutorKind.WSL_BRIDGE, ExecutorKind.WSL_MANUAL):
         try:

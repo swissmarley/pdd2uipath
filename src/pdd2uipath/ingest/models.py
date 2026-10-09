@@ -59,7 +59,7 @@ class Table(BaseModel):
 
 class Document(BaseModel):
     path: str
-    format: Literal["docx", "pdf"]
+    format: Literal["docx", "pdf", "markdown"]
     title: str
     sha256: str
     blocks: list[Block] = Field(default_factory=list)

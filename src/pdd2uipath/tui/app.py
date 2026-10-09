@@ -546,6 +546,38 @@ class Pdd2UipathApp(App[None]):
 
         self.run_worker(_do, thread=True, group="external")
 
+    def run_detail(self, title: str, fn: Any) -> None:
+        """Run ``fn`` (returns text) on a thread and show the text in the detail view."""
+
+        def _do() -> None:
+            try:
+                body = str(fn())
+            except Exception as exc:  # shown, never crashes the UI
+                body = f"error: {exc}"
+            if not self.closing:
+                with contextlib.suppress(RuntimeError):
+                    self.call_from_thread(
+                        self.push_screen, DetailScreen(title, body or "(no output)")
+                    )
+
+        self.run_worker(_do, thread=True, group="external")
+
+    def run_then(self, fn: Any, *, label: str, on_done: Any) -> None:
+        """Run ``fn`` on a thread; call ``on_done(result)`` on the UI thread when it succeeds."""
+        self.notify(f"{label}: running", timeout=4)
+
+        def _do() -> None:
+            try:
+                result = fn()
+            except Exception as exc:
+                self._notify_safe(f"{label}: {exc}"[:300], severity="error", timeout=10)
+                return
+            if not self.closing:
+                with contextlib.suppress(RuntimeError):
+                    self.call_from_thread(on_done, result)
+
+        self.run_worker(_do, thread=True, group="external")
+
     def clear_session_log(self) -> None:
         self.query_one(SessionLog).remove_children()
 

@@ -28,9 +28,13 @@ def parse_document(path: Path) -> Document:
     suffix = path.suffix.lower()
     if suffix == ".docx":
         return parse_docx(path)
+    if suffix in (".md", ".markdown"):
+        from pdd2uipath.ingest.markdown import parse_markdown
+
+        return parse_markdown(path)
     if suffix == ".pdf":
         return parse_pdf(path)
-    raise IngestError(f"unsupported PDD format {suffix!r}: expected .docx or .pdf")
+    raise IngestError(f"unsupported PDD format {suffix!r}: expected .docx, .pdf or .md")
 
 
 # ---------------------------------------------------------------- shared helpers

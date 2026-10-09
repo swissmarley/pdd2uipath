@@ -188,6 +188,32 @@ the executor:
 Generated projects always live under the Windows workspace root; `\\wsl$` paths are refused.
 Details and the per-round workflow are in the handbook.
 
+## Step 6b (optional): MCP servers for Confluence and GitHub
+
+If your company runs MCP servers (the same ones OpenCode uses), pdd2uipath can fetch PDDs from
+Confluence and drive GitHub through them. Either reuse OpenCode's list or declare the servers:
+
+```toml
+[mcp]
+import_opencode = true          # take the servers from ~/.config/opencode/opencode.json
+
+[mcp.servers.confluence]        # or declare them here (stdio or http)
+transport = "stdio"
+command = ["npx", "-y", "@acme/confluence-mcp"]
+env = { CONFLUENCE_TOKEN = "${CONFLUENCE_TOKEN}" }
+
+[mcp.recipes.fetch-pdd]         # map the PDD fetch onto your server's tool
+server = "confluence"
+tool = "get_attachment"
+args = { page_id = "{ref}", filename = "PDD.docx" }
+```
+
+Check it: `uv run pdd2uipath mcp servers`, `uv run pdd2uipath mcp tools confluence` shows the
+real tool names and arguments to put into the recipe, and `uv run pdd2uipath doctor` connects to
+every server. Then `uv run pdd2uipath mcp fetch-pdd <page id>` downloads the PDD into
+`pdd-inbox/` and `run-all` takes it from there; in the TUI `/open mcp:<page id>` does both.
+Markdown pages work as PDDs too, as long as they keep the Document Control and sign-off tables.
+
 ## Step 7: moving to the corporate VDI
 
 Everything is plain PyPI and npm packages, so the transfer is a matter of registries, proxies

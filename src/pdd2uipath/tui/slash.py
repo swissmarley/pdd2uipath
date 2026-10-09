@@ -2,13 +2,15 @@
 
 The prompt bar keeps its original job: plain text is queued as an instruction for the next
 authoring or repair round. A line starting with ``/`` is a command. Commands either call the
-app's existing actions, show a document in the detail screen, or change a setting. Settings
-changes are validated by the pydantic model, applied to the session, and persisted to the
-config file the session was loaded from (or the user config path when there is none).
+app's existing actions, show a document in the detail screen, change a setting, or talk to an
+MCP server. Settings changes are validated by the pydantic model, applied to the session, and
+persisted to the config file the session was loaded from (or the user config path when there
+is none).
 """
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -54,11 +56,23 @@ SETTABLE_KEYS: dict[str, str] = {
     "packages.prefer_prerelease": "true | false",
     "ui.theme": "dark | light",
     "ui.glyphs": "unicode | ascii",
+    "mcp.import_opencode": "true | false: also use the MCP servers of OpenCode's config",
+    "mcp.opencode_config": "path of OpenCode's opencode.json (default: ~/.config/opencode)",
+    "mcp.inbox": "folder where fetched PDDs are written",
+    "mcp.fetch_recipe": "recipe used by /open mcp:<ref> and `mcp fetch-pdd`",
 }
+
+GROUPS = [
+    ("run", "RUN THE PIPELINE"),
+    ("view", "LOOK AT THE RUN"),
+    ("settings", "SETTINGS  (validated, saved to the config file)"),
+    ("tools", "EXTERNAL TOOLS"),
+    ("ui", "SCREEN"),
+]
 
 
 def tokenize(text: str) -> list[str]:
-    """Split a command line on whitespace; double quotes group words (no escapes, Windows paths stay intact)."""
+    """Split on whitespace; double quotes group words (no escapes, Windows paths stay intact)."""
     out: list[str] = []
     cur: list[str] = []
     quoted = False
@@ -134,7 +148,13 @@ class SlashCommand:
     usage: str
     help: str
     handler: Handler
+    group: str = "view"
     aliases: list[str] = field(default_factory=list)
+    examples: list[str] = field(default_factory=list)
+
+    @property
+    def signature(self) -> str:
+        return f"/{self.name} {self.usage}".rstrip()
 
 
 class SlashCommands:
@@ -152,9 +172,14 @@ class SlashCommands:
         usage: str,
         help_text: str,
         handler: Handler,
+        *,
+        group: str,
         aliases: list[str] | None = None,
+        examples: list[str] | None = None,
     ) -> None:
-        self.commands.append(SlashCommand(name, usage, help_text, handler, aliases or []))
+        self.commands.append(
+            SlashCommand(name, usage, help_text, handler, group, aliases or [], examples or [])
+        )
 
     def find(self, name: str) -> SlashCommand | None:
         for c in self.commands:
@@ -165,24 +190,52 @@ class SlashCommands:
     def names(self) -> list[str]:
         return [f"/{c.name}" for c in self.commands]
 
-    def help_text(self, name: str | None = None) -> str:
-        if name:
-            c = self.find(name.lstrip("/"))
+    # ------------------------------------------------------------- help
+    def help_text(self, topic: str | None = None) -> str:
+        if topic in ("settings", "keys"):
+            lines = ["Settings keys for /set <key> <value> and /get <key>", ""]
+            width = max(len(k) for k in SETTABLE_KEYS)
+            lines += [f"  {k.ljust(width)}  {d}" for k, d in SETTABLE_KEYS.items()]
+            lines += ["", "Values are checked before they are applied; 'none' clears a text value."]
+            return "\n".join(lines)
+        if topic:
+            c = self.find(topic.lstrip("/"))
             if c is None:
-                return f"unknown command /{name}"
-            alias = f" (alias: {', '.join('/' + a for a in c.aliases)})" if c.aliases else ""
-            return f"/{c.name} {c.usage}{alias}\n\n{c.help}"
-        width = max(len(f"/{c.name} {c.usage}") for c in self.commands)
+                return f"unknown command /{topic}. Type /help for the list."
+            lines = [c.signature, "", c.help]
+            if c.aliases:
+                lines += ["", "Also: " + ", ".join("/" + a for a in c.aliases)]
+            if c.examples:
+                lines += ["", "Examples:"] + [f"  {e}" for e in c.examples]
+            return "\n".join(lines)
+        width = min(max(len(c.signature) for c in self.commands), 36)
         lines = [
-            "Type a command in the prompt bar. Plain text (no slash) is queued as an instruction",
-            "for the next authoring/repair round. Tab or Right accepts the inline suggestion.",
-            "",
+            "Type a command and press Enter. Tab completes the name. /help <command> explains one.",
+            "Text without a slash is sent to the agent as an instruction for its next round.",
         ]
-        for c in self.commands:
-            lines.append(f"{('/' + c.name + ' ' + c.usage).ljust(width)}  {c.help.splitlines()[0]}")
-        lines += ["", "Settings keys for /set:", ""]
-        for k, d in SETTABLE_KEYS.items():
-            lines.append(f"  {k.ljust(26)} {d}")
+        for key, title in GROUPS:
+            members = [c for c in self.commands if c.group == key]
+            if not members:
+                continue
+            lines += ["", title]
+            for c in members:
+                first = c.help.splitlines()[0]
+                if len(c.signature) <= width:
+                    lines.append(f"  {c.signature.ljust(width)}  {first}")
+                else:  # long syntax: description on its own line
+                    lines.append(f"  {c.signature}")
+                    lines.append(f"  {''.ljust(width)}  {first}")
+        lines += [
+            "",
+            "EXAMPLES",
+            "  /agent copilot                      Copilot CLI with its automatic model",
+            "  /agent opencode github-copilot/gpt-6.1-sol",
+            "  /set repair.max_rounds 3            three repair rounds after a failed gate",
+            "  /open mcp:123456                    fetch a PDD from Confluence via MCP, then open it",
+            "  /mcp tools github                   what the GitHub MCP server offers",
+            "",
+            "/help settings lists every key for /set.",
+        ]
         return "\n".join(lines)
 
     # ------------------------------------------------------------- dispatch
@@ -204,125 +257,201 @@ class SlashCommands:
 
     # ------------------------------------------------------------- commands
     def _register_all(self) -> None:
-        self.add("help", "[command]", "List commands, or explain one.", _help, ["h", "?"])
-        self.add(
-            "open",
-            "[pdd-path]",
-            "Open a PDD (creates or resumes its run); no path opens the picker.",
-            _open,
+        add = self.add
+        add(
+            "help",
+            "[command|settings]",
+            "This list; /help <command> for details.",
+            _help,
+            group="view",
+            aliases=["h", "?"],
         )
-        self.add(
+        add(
+            "open",
+            "[path | mcp:<ref>]",
+            "Open a PDD and create or resume its run. No path: file picker. mcp:<ref>: fetch it over MCP first.",
+            _open,
+            group="run",
+            examples=[
+                "/open samples/PDD-01_Vendor_Invoice_Processing_v1.2_APPROVED.docx",
+                "/open mcp:123456",
+            ],
+        )
+        add(
             "run",
             "[stage]",
-            f"Run all stages (pauses at the gates), or one stage: {', '.join(STAGES[1:])}.",
+            f"Run every stage (pauses at the gates), or one of: {', '.join(STAGES[1:])}.",
             _run,
+            group="run",
+            examples=["/run", "/run design"],
         )
-        self.add(
+        add(
             "approve",
             "[your name]",
-            "Approve the current plan (hash-bound) and continue; no name opens the modal.",
+            "Approve the current plan (bound to its hash) and continue. No name: open the modal.",
             _approve,
+            group="run",
+            examples=['/approve "Jane Doe"'],
         )
-        self.add(
-            "resume", "", "wsl-manual: collect the pending Windows round and continue.", _resume
-        )
-        self.add(
-            "status", "", "Show stage statuses, approval, pending round, repair round.", _status
-        )
-        self.add(
-            "doctor", "", "Preflight checks (no Studio/network probes) in the detail view.", _doctor
-        )
-        self.add(
-            "studio",
+        add(
+            "resume",
             "",
-            "Open the generated project in Studio Desktop (uip rpa studio start).",
-            _studio,
+            "wsl-manual: collect the pending Windows round and continue.",
+            _resume,
+            group="run",
         )
-        self.add("report", "", "Show report.md.", _show_file("report"))
-        self.add("plan", "", "Show the rendered plan.", _show_file("plan"))
-        self.add("spec", "", "Show the extracted ProcessSpec (spec.json).", _show_file("spec"))
-        self.add("design", "", "Show the design decisions (design.json).", _show_file("design"))
-        self.add(
-            "logs",
-            "[author|events|author-repair-N] [lines]",
-            "Show the tail of a run log (default: author, 80 lines).",
-            _logs,
-        )
-        self.add(
+        add(
             "instruction",
             "<text>",
-            "Queue an instruction for the next authoring/repair round (same as plain text).",
+            "Queue an instruction for the agent's next authoring or repair round (same as plain text).",
             _instruction,
-            ["note"],
+            group="run",
+            aliases=["note"],
         )
-        self.add(
-            "config",
-            "[save|path|show]",
-            "Show the effective settings, save them, or show the file path.",
-            _config,
+        add(
+            "status",
+            "",
+            "Stage statuses, approval, repair round, pending round.",
+            _status,
+            group="view",
         )
-        self.add(
-            "set",
-            "<key> [value]",
-            "Change a setting for this session and save it; without a value shows it. See keys below.",
-            _set,
+        add("plan", "", "The rendered plan.", _show_file("plan"), group="view")
+        add("report", "", "report.md of this run.", _show_file("report"), group="view")
+        add("spec", "", "The extracted ProcessSpec (spec.json).", _show_file("spec"), group="view")
+        add("design", "", "The design decisions (design.json).", _show_file("design"), group="view")
+        add(
+            "logs",
+            "[author|events|author-repair-N] [lines]",
+            "Tail of a run log (default: author, 80 lines).",
+            _logs,
+            group="view",
+            examples=["/logs", "/logs author-repair-1 200", "/logs events"],
         )
-        self.add("get", "<key>", "Show one setting.", _get)
-        self.add(
+        add("doctor", "", "Preflight checks (no Studio or network probes).", _doctor, group="view")
+        add(
             "agent",
             "[opencode|copilot|fake] [model]",
-            "Show or set the authoring agent backend and model (saved).",
+            "Show or set the authoring agent and its model.",
             _agent,
+            group="settings",
+            examples=["/agent", "/agent copilot", "/agent opencode github-copilot/gpt-6.1-sol"],
         )
-        self.add(
+        add(
             "model",
             "[id|none]",
-            "Show or set the authoring model (saved). 'none' = backend default / auto.",
+            "Show or set the authoring model; 'none' = the backend default (auto for Copilot).",
             _model,
+            group="settings",
+            examples=["/model gpt-6.1-sol", "/model none"],
         )
-        self.add(
+        add(
             "extraction",
             "[backend] [model]",
-            "Show or set the extraction backend and model (saved).",
+            "Show or set the extraction backend and model.",
             _extraction,
+            group="settings",
+            examples=["/extraction copilot", "/extraction openai-compatible qwen2.5-coder:32b"],
         )
-        self.add(
+        add(
             "executor",
             "[auto|native|wsl-interop|wsl-bridge|wsl-manual]",
-            "Show or set where uip runs (saved).",
+            "Show or set where uip runs.",
             _executor,
+            group="settings",
         )
-        self.add("rounds", "[n]", "Show or set the maximum repair rounds (saved).", _rounds)
-        self.add(
-            "ui-capture", "[stub|live]", "Show or set the UI capture mode (saved).", _ui_capture
+        add("rounds", "[n]", "Show or set the maximum repair rounds.", _rounds, group="settings")
+        add(
+            "ui-capture",
+            "[stub|live]",
+            "Show or set the UI capture mode.",
+            _ui_capture,
+            group="settings",
         )
-        self.add(
+        add(
+            "set",
+            "<key> [value]",
+            "Change any setting (/help settings lists the keys); without a value shows it.",
+            _set,
+            group="settings",
+            examples=[
+                "/set repair.max_rounds 3",
+                "/set extraction.base_url http://localhost:11434/v1",
+            ],
+        )
+        add("get", "<key>", "Show one setting.", _get, group="settings")
+        add(
+            "config",
+            "[show|save|path]",
+            "Show the effective settings, save them, or show the file path.",
+            _config,
+            group="settings",
+        )
+        add(
             "copilot",
             "login|version|models",
-            "GitHub Copilot CLI: device-code login (output in the session log), version, model notes.",
+            "Copilot CLI: device-code login (output in the session log), version, model notes.",
             _copilot,
+            group="tools",
+            examples=["/copilot login", "/copilot models"],
         )
-        self.add(
+        add(
             "opencode",
             "models [provider]|login|version",
-            "OpenCode: list models it can use, login instructions, version.",
+            "OpenCode: the models it can use, login steps, version.",
             _opencode,
+            group="tools",
+            examples=["/opencode models github-copilot"],
         )
-        self.add(
+        add(
+            "mcp",
+            "<subcommand> ...",
+            "MCP servers (Confluence, GitHub, ...): servers, tools, call, resources, read, recipe, fetch-pdd.\n"
+            "  /mcp servers                      configured servers and recipes\n"
+            "  /mcp tools <server>               tool names and arguments (* = required)\n"
+            "  /mcp call <server> <tool> [json]  call one tool\n"
+            "  /mcp resources <server>           list resources; /mcp read <server> <uri> reads one\n"
+            "  /mcp recipe <name> key=value ...  run a configured recipe\n"
+            "  /mcp fetch-pdd <ref>              fetch a PDD through the fetch-pdd recipe",
+            _mcp,
+            group="tools",
+            examples=[
+                "/mcp servers",
+                "/mcp tools confluence",
+                '/mcp call github create_branch {"owner":"acme","repo":"rpa","branch":"feature/x"}',
+                "/mcp recipe publish-branch repo=rpa branch=feature/x",
+                "/mcp fetch-pdd 123456",
+            ],
+        )
+        add(
             "bridge",
             "install|status|stop",
             "wsl-bridge worker: generate, check heartbeat, stop.",
             _bridge,
+            group="tools",
         )
-        self.add("theme", "", "Toggle dark / light.", lambda app, _a: app.action_toggle_theme())
-        self.add(
+        add(
+            "theme",
+            "",
+            "Toggle dark / light.",
+            lambda app, _a: app.action_toggle_theme(),
+            group="ui",
+        )
+        add(
             "inspector",
             "",
             "Show / hide the right pane.",
             lambda app, _a: app.action_toggle_inspector(),
+            group="ui",
         )
-        self.add("clear", "", "Clear the session log.", _clear)
-        self.add("quit", "", "Quit; the run state is persisted.", _quit, ["exit", "q"])
+        add("clear", "", "Clear the session log.", _clear, group="ui")
+        add(
+            "quit",
+            "",
+            "Quit; the run state is persisted.",
+            _quit,
+            group="ui",
+            aliases=["exit", "q"],
+        )
 
 
 # ----------------------------------------------------------------- handlers
@@ -334,14 +463,30 @@ def _need_pipeline(app: Pdd2UipathApp) -> bool:
 
 
 def _help(app: Pdd2UipathApp, args: list[str]) -> None:
-    app.show_detail("slash commands", app.slash.help_text(args[0] if args else None))
+    app.show_detail("commands", app.slash.help_text(args[0] if args else None))
 
 
 def _open(app: Pdd2UipathApp, args: list[str]) -> None:
     if not args:
         app.action_open_pdd()
         return
-    path = Path(" ".join(args)).expanduser()
+    target = " ".join(args)
+    if target.lower().startswith("mcp:"):
+        ref = target[4:].strip()
+        if not ref:
+            raise ValueError("usage: /open mcp:<ref>")
+        from pdd2uipath.mcp.recipes import fetch_pdd
+
+        def _fetch() -> Path:
+            return fetch_pdd(app.settings, ref, log=app.bus.log)
+
+        app.run_then(
+            _fetch,
+            label=f"mcp fetch-pdd {ref}",
+            on_done=lambda path: app.open_pdd_path(Path(path)),
+        )
+        return
+    path = Path(target).expanduser()
     if not path.is_file():
         raise ValueError(f"no such file: {path}")
     app.open_pdd_path(path)
@@ -387,7 +532,7 @@ def _status(app: Pdd2UipathApp, args: list[str]) -> None:
     lines = [f"PDD: {p.pdd.name}", f"run dir: {p.paths.run_dir_windows}", ""]
     for name, status in st.statuses().items():
         rec = st.stage(name)
-        extra = rec.error or rec.outputs.get("summary", "") if rec.outputs else rec.error
+        extra = rec.error or (rec.outputs.get("summary", "") if rec.outputs else "")
         lines.append(f"{name:9} {status:8} {extra or ''}")
     lines.append("")
     if st.approval:
@@ -407,11 +552,6 @@ def _status(app: Pdd2UipathApp, args: list[str]) -> None:
 
 def _doctor(app: Pdd2UipathApp, args: list[str]) -> None:
     app.action_doctor()
-
-
-def _studio(app: Pdd2UipathApp, args: list[str]) -> None:
-    if _need_pipeline(app):
-        app.action_open_studio()
 
 
 def _show_file(which: str) -> Handler:
@@ -485,7 +625,7 @@ def _config(app: Pdd2UipathApp, args: list[str]) -> None:
 
 def _set(app: Pdd2UipathApp, args: list[str]) -> None:
     if not args:
-        raise ValueError("usage: /set <key> [value]")
+        raise ValueError("usage: /set <key> [value]   (/help settings lists the keys)")
     key = args[0]
     if len(args) == 1:
         _get(app, [key])
@@ -498,7 +638,7 @@ def _get(app: Pdd2UipathApp, args: list[str]) -> None:
         raise ValueError("usage: /get <key>")
     key = args[0]
     if key not in SETTABLE_KEYS:
-        raise ValueError(f"unknown setting {key!r}; see /help")
+        raise ValueError(f"unknown setting {key!r}; /help settings lists the keys")
     value = get_setting(app.settings, key)
     app.notify(f"{key} = {value!r}  ({SETTABLE_KEYS[key]})", timeout=8)
 
@@ -567,8 +707,7 @@ def _ui_capture(app: Pdd2UipathApp, args: list[str]) -> None:
 
 def _copilot(app: Pdd2UipathApp, args: list[str]) -> None:
     sub = args[0].lower() if args else "version"
-    exe = which_cli("copilot")
-    if exe is None:
+    if which_cli("copilot") is None:
         raise ValueError("copilot CLI not on PATH (npm i -g @github/copilot)")
     if sub == "version":
         out = _capture(["copilot", "--version"])
@@ -583,7 +722,7 @@ def _copilot(app: Pdd2UipathApp, args: list[str]) -> None:
         app.show_detail(
             "Copilot CLI models",
             "The Copilot CLI accepts only the models enabled in your plan's model picker.\n"
-            "Copilot Free: no picker models, use model 'none' (= auto).\n"
+            "Copilot Free: no picker models, use /model none (= auto).\n"
             "Enterprise/Pro seats: use the ids shown by /model in an interactive `copilot` session,\n"
             "e.g. /model gpt-6.1-sol. A wrong id fails fast with 'is not available' (no request spent).\n\n"
             f"current agent model: {app.settings.agent.model or '(auto)'}",
@@ -613,6 +752,123 @@ def _opencode(app: Pdd2UipathApp, args: list[str]) -> None:
         )
     else:
         raise ValueError("usage: /opencode models [provider]|login|version")
+
+
+def _mcp(app: Pdd2UipathApp, args: list[str]) -> None:
+    from pdd2uipath.mcp.client import McpClient
+    from pdd2uipath.mcp.recipes import fetch_pdd, resolve_servers, run_recipe
+
+    sub = args[0].lower() if args else "servers"
+    settings = app.settings
+    servers = resolve_servers(settings)
+
+    def need(name: str) -> McpClient:
+        if name not in servers:
+            known = ", ".join(sorted(servers)) or "none"
+            raise ValueError(f"unknown MCP server {name!r}; configured: {known}")
+        return McpClient(name, servers[name])
+
+    if sub == "servers":
+        lines = []
+        for name, cfg in servers.items():
+            target = " ".join(cfg.command) if cfg.transport == "stdio" else cfg.url
+            lines.append(f"{name:16} {cfg.transport:6} {target}  {cfg.description}")
+        if not lines:
+            lines.append(
+                "no MCP servers configured: add [mcp.servers.<name>] to the config or "
+                "/set mcp.import_opencode true"
+            )
+        for name, r in settings.mcp.recipes.items():
+            steps = ", ".join(s.tool for s in r.all_steps())
+            lines.append(
+                f"recipe {name:12} -> {r.server}: {steps}  params: {', '.join(r.params) or '-'}"
+            )
+        app.show_detail("MCP servers", "\n".join(lines))
+    elif sub == "tools":
+        if len(args) < 2:
+            raise ValueError("usage: /mcp tools <server>")
+        client = need(args[1])
+
+        def _tools() -> str:
+            with client as c:
+                found = c.list_tools()
+                head = f"{c.server_info.get('name', '?')} {c.server_info.get('version', '')}: {len(found)} tools"
+            return head + "\n\n" + "\n".join(t.summary() for t in found)
+
+        app.run_detail(f"mcp tools {args[1]}", _tools)
+    elif sub == "resources":
+        if len(args) < 2:
+            raise ValueError("usage: /mcp resources <server>")
+        client = need(args[1])
+
+        def _res() -> str:
+            with client as c:
+                return (
+                    "\n".join(f"{r.uri}  {r.mime_type}  {r.name}" for r in c.list_resources())
+                    or "(none)"
+                )
+
+        app.run_detail(f"mcp resources {args[1]}", _res)
+    elif sub == "read":
+        if len(args) < 3:
+            raise ValueError("usage: /mcp read <server> <uri>")
+        client = need(args[1])
+        uri = args[2]
+
+        def _read() -> str:
+            with client as c:
+                r = c.read_resource(uri)
+            return (
+                r.text or f"(binary {len(r.first_blob.data or b'')} bytes; use the CLI with --out)"
+                if r.first_blob
+                else r.text
+            )
+
+        app.run_detail(f"mcp read {uri}", _read)
+    elif sub == "call":
+        if len(args) < 3:
+            raise ValueError('usage: /mcp call <server> <tool> [{"json": "args"}]')
+        client = need(args[1])
+        tool = args[2]
+        try:
+            arguments = json.loads(" ".join(args[3:])) if len(args) > 3 else {}
+        except ValueError as exc:
+            raise ValueError(f"arguments must be a JSON object: {exc}") from exc
+
+        def _call() -> str:
+            with client as c:
+                r = c.call_tool(tool, arguments)
+            return r.text or json.dumps(r.raw, indent=2)
+
+        app.run_detail(f"mcp call {args[1]} {tool}", _call)
+    elif sub == "recipe":
+        if len(args) < 2:
+            raise ValueError("usage: /mcp recipe <name> key=value ...")
+        name = args[1]
+        params: dict[str, Any] = {}
+        for item in args[2:]:
+            if "=" not in item:
+                raise ValueError(f"parameters are key=value, got {item!r}")
+            k, v = item.split("=", 1)
+            params[k] = v
+
+        def _recipe() -> str:
+            outcome = run_recipe(settings, name, params, log=app.bus.log)
+            saved = "".join(f"saved {p}\n" for p in outcome.saved)
+            return saved + (outcome.text or json.dumps(outcome.last.raw, indent=2))
+
+        app.run_detail(f"mcp recipe {name}", _recipe)
+    elif sub == "fetch-pdd":
+        if len(args) < 2:
+            raise ValueError("usage: /mcp fetch-pdd <ref>")
+        ref = args[1]
+        app.run_then(
+            lambda: fetch_pdd(settings, ref, log=app.bus.log),
+            label=f"mcp fetch-pdd {ref}",
+            on_done=lambda path: app.notify(f"fetched {path}; /open {path} to start", timeout=10),
+        )
+    else:
+        raise ValueError("usage: /mcp servers|tools|call|resources|read|recipe|fetch-pdd")
 
 
 def _bridge(app: Pdd2UipathApp, args: list[str]) -> None:
@@ -660,6 +916,7 @@ def config_target_path(settings: Settings, explicit: Path | None) -> Path:
 
 
 __all__ = [
+    "GROUPS",
     "SETTABLE_KEYS",
     "SlashCommand",
     "SlashCommands",

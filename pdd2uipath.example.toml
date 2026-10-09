@@ -51,3 +51,38 @@ tenant = ""
 [packages]
 uia_min_version = "26.10.2"
 prefer_prerelease = false
+
+# ---------------------------------------------------------------- MCP (optional)
+# Model Context Protocol servers your company runs (Confluence, GitHub, ...). Secrets stay in
+# environment variables: ${VAR} is expanded at connect time and never written anywhere.
+[mcp]
+import_opencode = false        # true: also use the "mcp" servers of ~/.config/opencode/opencode.json
+# opencode_config = "C:/Users/me/.config/opencode/opencode.json"
+inbox = "pdd-inbox"            # fetched PDDs are written here (relative to the working directory)
+fetch_recipe = "fetch-pdd"     # recipe behind `pdd2uipath mcp fetch-pdd` and `/open mcp:<ref>`
+
+# [mcp.servers.confluence]      # a local (stdio) server
+# transport = "stdio"
+# command = ["npx", "-y", "@acme/confluence-mcp"]
+# env = { CONFLUENCE_URL = "https://confluence.corp.example", CONFLUENCE_TOKEN = "${CONFLUENCE_TOKEN}" }
+# timeout_s = 60
+
+# [mcp.servers.github]          # a remote (streamable HTTP) server
+# transport = "http"
+# url = "http://localhost:8081/mcp"
+# headers = { Authorization = "Bearer ${GITHUB_MCP_TOKEN}" }
+
+# Recipes map pdd2uipath intents onto YOUR server's tool names (see `pdd2uipath mcp tools <server>`).
+# [mcp.recipes.fetch-pdd]       # used by `mcp fetch-pdd <ref>` and `/open mcp:<ref>`
+# server = "confluence"
+# tool = "get_attachment"       # returns the PDD as a blob (pdf/docx) or the page as markdown
+# args = { page_id = "{ref}", filename = "PDD.docx" }
+
+# [mcp.recipes.publish-branch]  # run with `mcp recipe publish-branch repo=rpa-invoices branch=feature/pdd`
+# server = "github"
+# params = ["repo", "branch"]
+# steps = [
+#   { tool = "create_branch", args = { owner = "acme", repo = "{repo}", branch = "{branch}", from_branch = "main" } },
+#   { tool = "create_pull_request", args = { owner = "acme", repo = "{repo}", head = "{branch}", base = "main", title = "PDD import" } },
+# ]
+
