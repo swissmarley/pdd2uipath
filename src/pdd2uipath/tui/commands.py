@@ -29,6 +29,11 @@ class Pdd2UipathCommands(Provider):
                 partial(tui.action_run_stage, s),
             )
         yield "Run doctor", "Preflight checks and executor recommendation", tui.action_doctor
+        yield (
+            "Slash commands help",
+            "/help: every /command of the prompt bar and the settings keys",
+            partial(tui.slash.run, "/help"),
+        )
         yield "Approve plan", "Open the plan approval modal", tui.action_approve_plan
         for kind in ExecutorKind:
             if kind != ExecutorKind.AUTO:

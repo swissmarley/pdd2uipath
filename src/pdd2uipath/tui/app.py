@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -13,9 +14,16 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.suggester import SuggestFromList
 from textual.widgets import DataTable, Footer
 
-from pdd2uipath.core.config import ExecutorKind, Settings, load_settings, settings_source_path
+from pdd2uipath.core.config import (
+    ExecutorKind,
+    Settings,
+    load_settings,
+    save_settings,
+    settings_source_path,
+)
 from pdd2uipath.core.events import (
     EventBus,
     ExecutorStatus,
@@ -24,6 +32,7 @@ from pdd2uipath.core.events import (
     StageFinished,
     StageStarted,
 )
+from pdd2uipath.core.exe import resolve_argv
 from pdd2uipath.core.runner import Pipeline, PipelineStop
 from pdd2uipath.core.state import STAGES
 from pdd2uipath.executors.base import ExecutorError
@@ -31,6 +40,7 @@ from pdd2uipath.executors.wsl_manual import RoundAborted, RoundPending
 from pdd2uipath.tui.commands import Pdd2UipathCommands
 from pdd2uipath.tui.gates import TuiGateHandler
 from pdd2uipath.tui.screens import DetailScreen, PickPddScreen, PlanApprovalScreen
+from pdd2uipath.tui.slash import SlashCommands, apply_setting, config_target_path, get_setting
 from pdd2uipath.tui.theme import DARK, LIGHT, no_color, pick_glyphs
 from pdd2uipath.tui.widgets import Inspector, PipelineSidebar, PromptBar, SessionLog, StatusHeader
 
@@ -74,6 +84,7 @@ class Pdd2UipathApp(App[None]):
         self.closing = False  # set on exit so blocked gate waits in the worker thread return
         self.last_error = ""
         self._unsubscribe: Callable[[], None] | None = None
+        self.slash = SlashCommands(self)
 
     # ------------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
@@ -92,6 +103,9 @@ class Pdd2UipathApp(App[None]):
         if no_color():
             self.ansi_color = True
         self._unsubscribe = self.bus.subscribe(self._on_bus_event)
+        self.query_one(PromptBar).suggester = SuggestFromList(
+            self.slash.names(), case_sensitive=False
+        )
         self.set_interval(1.0, self._tick)
         self.set_interval(3.0, self._refresh_executor_status)
         if self.pipeline is None and (self.pdd or self.run_dir):
@@ -324,16 +338,7 @@ class Pdd2UipathApp(App[None]):
 
         def _done(name: str | None) -> None:
             if name:
-                try:
-                    p.approve_plan(name)
-                except Exception as exc:
-                    self.notify(str(exc), severity="error")
-                    return
-                self.notify(f"plan approved by {name}")
-                self._refresh_inspector()
-                gate = p.state.current_gate()
-                if gate is None and p.state.stage("scaffold").status == "pending":
-                    self._start(p.run_all, "run-all")
+                self.approve_plan_as(name)
 
         self.push_screen(
             PlanApprovalScreen(text, sha256_file(p.paths.plan), installs, reason), _done
@@ -345,7 +350,7 @@ class Pdd2UipathApp(App[None]):
             self.pipeline._executor = None
             self.query_one(StatusHeader).executor = kind.value
             self.query_one(StatusHeader).refresh_line()
-        self.notify(f"executor: {kind.value} (session only; save with doctor --write-config)")
+        self.notify(f"executor: {kind.value} (session only; /executor {kind.value} saves it)")
 
     def action_install_bridge(self) -> None:
         from pdd2uipath.doctor.bridge import install_bridge
@@ -428,15 +433,142 @@ class Pdd2UipathApp(App[None]):
 
         self.push_screen(PickPddScreen(candidates), _picked)
 
+    # ------------------------------------------------------------------ slash command support
+    def show_detail(self, title: str, body: str) -> None:
+        self.push_screen(DetailScreen(title, body))
+
+    def open_pdd_path(self, path: Path) -> None:
+        self._open_pipeline(path, None)
+
+    def start_pipeline(self, fn: Any, label: str) -> None:
+        self._start(fn, label)
+
+    def approve_plan_as(self, name: str) -> None:
+        """Record the approval and continue the run when nothing else is waiting."""
+        p = self.pipeline
+        if p is None:
+            return
+        try:
+            p.approve_plan(name)
+        except Exception as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self.notify(f"plan approved by {name}")
+        self._refresh_inspector()
+        if p.state.current_gate() is None and p.state.stage("scaffold").status == "pending":
+            self._start(p.run_all, "run-all")
+
+    def config_target(self) -> Path:
+        return config_target_path(self.settings, self.config_path)
+
+    def save_config(self) -> Path:
+        target = self.config_target()
+        save_settings(self.settings, target)
+        self.config_path = target
+        return target
+
+    def update_setting(self, key: str, value: str, *, quiet: bool = False) -> None:
+        """Validate, apply to the session (pipeline caches reset), persist, show."""
+        new = apply_setting(self.settings, key, value)
+        self.settings = new
+        if self.pipeline is not None:
+            self.pipeline.settings = new
+            self.pipeline._executor = None
+            self.pipeline._agent = None
+            self.pipeline._commands = None
+        self._refresh_header()
+        path = self.save_config()
+        if not quiet:
+            self.notify(f"{key} = {get_setting(new, key)!r} (saved to {path.name})", timeout=6)
+
+    def _refresh_header(self) -> None:
+        header = self.query_one(StatusHeader)
+        header.agent = self.settings.agent.backend
+        header.model = self.settings.agent.model or ""
+        header.executor = (
+            self.pipeline.executor_kind.value if self.pipeline else self.settings.executor.value
+        )
+        header.refresh_line()
+
+    def run_streaming(self, argv: list[str], *, label: str, hint: str = "") -> None:
+        """Run an external CLI (e.g. copilot login) and stream its lines into the session log."""
+        if hint:
+            self.notify(hint, timeout=10)
+
+        def _do() -> None:
+            self.bus.log(f"{label}: {' '.join(argv)}")
+            try:
+                proc = subprocess.Popen(
+                    resolve_argv(argv),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    shell=False,
+                )
+            except OSError as exc:
+                self.bus.log(f"{label}: cannot start: {exc}", level="error")
+                return
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if line.strip():
+                    self.bus.log(f"{label}: {line.rstrip()}")
+            code = proc.wait()
+            self.bus.log(f"{label}: exit {code}", level="error" if code else "info")
+            self._notify_safe(f"{label}: exit {code}", severity="error" if code else "information")
+
+        self.run_worker(_do, thread=True, group="external")
+
+    def run_capture(self, argv: list[str], *, title: str) -> None:
+        """Run an external CLI and show its output in the detail view."""
+
+        def _do() -> None:
+            try:
+                proc = subprocess.run(
+                    resolve_argv(argv),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=120,
+                    shell=False,
+                )
+                body = (proc.stdout or "") + (("\n" + proc.stderr) if proc.stderr else "")
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                body = str(exc)
+            if not self.closing:
+                with contextlib.suppress(RuntimeError):
+                    self.call_from_thread(
+                        self.push_screen, DetailScreen(title, body.strip() or "(no output)")
+                    )
+
+        self.run_worker(_do, thread=True, group="external")
+
+    def clear_session_log(self) -> None:
+        self.query_one(SessionLog).remove_children()
+
     # ------------------------------------------------------------------ events from widgets
     def on_pipeline_sidebar_stage_selected(self, msg: PipelineSidebar.StageSelected) -> None:
         self.query_one(SessionLog).set_filter(msg.stage)
 
     def on_input_submitted(self, event: Any) -> None:
-        if getattr(event.input, "id", "") == "prompt-bar" and self.pipeline is not None:
-            self.pipeline.extra_instruction = event.value
-            event.input.value = ""
-            self.notify("instruction queued for the next authoring/repair round")
+        if getattr(event.input, "id", "") != "prompt-bar":
+            return
+        text = event.value
+        event.input.value = ""
+        if self.slash.run(text):
+            return
+        if not text.strip():
+            return
+        if self.pipeline is None:
+            self.notify(
+                "open a PDD first (/open or o); /help lists the commands", severity="warning"
+            )
+            return
+        self.pipeline.extra_instruction = text
+        self.notify("instruction queued for the next authoring/repair round")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "validation-table":

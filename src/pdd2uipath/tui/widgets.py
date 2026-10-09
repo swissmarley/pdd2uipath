@@ -540,6 +540,6 @@ class PromptBar(Input):
 
     def __init__(self) -> None:
         super().__init__(
-            placeholder="instruction for the next authoring/repair round … (Enter to queue)",
+            placeholder="/help for commands · plain text = instruction for the next authoring/repair round (Enter)",
             id="prompt-bar",
         )
